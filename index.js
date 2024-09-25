@@ -3,6 +3,7 @@ const app = express();
 require('dotenv').config()
 const jwt = require('jsonwebtoken');
 const cors = require('cors')
+const nodemailer = require("nodemailer");
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY)
 const port = process.env.PORT || 5000;
 
@@ -10,6 +11,64 @@ const port = process.env.PORT || 5000;
 // middlewares
 app.use(cors());
 app.use(express.json());
+
+// send email
+const sendEmail = (emailAddress, emailData) => {
+  const transporter = nodemailer.createTransport({
+    service: 'gmail',
+    host: "smtp.gmail.com",
+    port: 587,
+    secure: false, // true for port 465, false for other ports
+    auth: {
+      user: process.env.TRANSPORTER_EMAIL,
+      pass: process.env.TRANSPORTER_PASS,
+    },
+  });
+
+  const mailBody = {
+    from: `"Coffee-shop-bd" <${process.env.TRANSPORTER_EMAIL}>`, // sender address
+    to: emailAddress, // list of receivers
+    subject: emailData.subject, // Subject line
+    html: emailData.message, // html body
+  }
+
+  // verify connection configuration
+  transporter.verify(function (error, success) {
+    if (error) {
+      console.log(error);
+    } else {
+      console.log("Server is ready to take our messages");
+    }
+  });
+
+
+  transporter.sendMail(mailBody, (error, info) => {
+    if (error) {
+      console.log(error);
+    } else {
+      console.log('Email Sent: ' + info.response);
+    }
+  });
+
+
+}
+
+// verify token
+const verifyToken = (req, res, next) => {
+  console.log('inside verify token', req.headers.authorization);
+  if (!req.headers.authorization) {
+    return res.status(401).send({ message: 'unauthorized access' })
+  }
+  const token = req.headers.authorization.split(' ')[1]
+  jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
+    if (err) {
+      return res.status(401).send({ message: 'unauthorized access' })
+    }
+    req.decoded = decoded;
+    next();
+  })
+}
+
 
 
 const { MongoClient, ServerApiVersion, Timestamp, ObjectId } = require('mongodb');
@@ -67,6 +126,18 @@ async function run() {
       const bookingData = req.body;
       // save coffee booking info
       const result = await bookingsCollection.insertOne(bookingData)
+
+      // send email to guest
+      sendEmail(bookingData?.guest?.email, {
+        subject: 'booking successful!',
+        message: `You have successfully booked a room through Coffee Shop BD. Transaction Id: ${bookingData.transactionId}`
+      })
+
+      // send email to host
+      sendEmail(bookingData?.host?.email, {
+        subject: 'Your Coffee got ordered!',
+        message: `Get ready to welcome ${bookingData?.guest.name}`
+      })
 
       //change coffee availability status
       const coffeeId = bookingData.coffeeId;
@@ -142,6 +213,13 @@ async function run() {
         }
       }
       const result = await usersCollection.updateOne(query, updateDoc, options)
+      // welcome new user
+      sendEmail(user?.email, {
+        subject: 'Welcome our coffee shop',
+        message: `Visit Our Shop and order your favorite Coffee`
+      })
+
+
       res.send(result);
     })
 
@@ -153,20 +231,6 @@ async function run() {
     })
 
     // middleWares
-    const verifyToken = (req, res, next) => {
-      console.log('inside verify token', req.headers.authorization);
-      if (!req.headers.authorization) {
-        return res.status(401).send({ message: 'unauthorized access' })
-      }
-      const token = req.headers.authorization.split(' ')[1]
-      jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
-        if (err) {
-          return res.status(401).send({ message: 'unauthorized access' })
-        }
-        req.decoded = decoded;
-        next();
-      })
-    }
 
     // use verify admin after verify token
     const verifyAdmin = async (req, res, next) => {
@@ -254,9 +318,9 @@ async function run() {
       res.send({ totalUser, totalCoffee, totalBookings: bookingDetails.length, totalPrice, chartData })
     })
 
-     // host statistics
+    // host statistics
     //  app.get('/host-stat',  async (req, res) => {
-    //   const {email} = req.params
+    //   const {email} = req.user
     //   console.log(email);
     //   const bookingDetails = await bookingsCollection.find({'host.email': email}, {
     //     projection: {
@@ -264,7 +328,7 @@ async function run() {
     //     }
     //   }).toArray()
 
-      
+
     //   const totalCoffee = await menuCollection.countDocuments({'host.email': email})
     //   const totalPrice = bookingDetails.reduce((sum, booking) => sum + booking.price, 0)
 
@@ -284,20 +348,20 @@ async function run() {
     //   res.send({ totalCoffee, totalBookings: bookingDetails.length, totalPrice, chartData,  })
     // })
 
-    app.get('/host-stat', async(req, res) =>{
+    app.get('/host-stat', async (req, res) => {
       const email = req.body;
-      console.log(email);
+      // console.log(email);
       const users = await usersCollection.estimatedDocumentCount()
       const bookings = await bookingsCollection.estimatedDocumentCount()
       const totalCoffee = await menuCollection.estimatedDocumentCount()
-      res.send({users, bookings, totalCoffee, })
+      res.send({ users, bookings, totalCoffee, })
     })
 
     // update coffee data
-    app.put('/coffee/update/:id', async(req, res) =>{
+    app.put('/coffee/update/:id', async (req, res) => {
       const id = req.params.id;
       const coffeeData = req.body;
-      const query = {_id: new ObjectId(id)}
+      const query = { _id: new ObjectId(id) }
       const updateDoc = {
         $set: coffeeData
       }
@@ -306,7 +370,7 @@ async function run() {
     })
 
 
-    
+
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
